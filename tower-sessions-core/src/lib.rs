@@ -1,7 +1,7 @@
 #[doc(inline)]
 pub use self::{
     session::{Expiry, Session},
-    session_store::{CachingSessionStore, ExpiredDeletion, SessionStore},
+    session_store::{CachingSessionStore, ExpiredDeletion, NewSessionStore, SessionStore},
 };
 
 #[cfg(feature = "axum-core")]

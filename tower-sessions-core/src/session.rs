@@ -15,9 +15,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, DecodeError, Engine as _}
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::{Mutex, MutexGuard, OnceCell};
 
-use crate::{session_store, SessionStore};
+use crate::{session_store, session_store::NewSessionStore, SessionStore};
 
 const DEFAULT_DURATION: Duration = Duration::weeks(2);
 
@@ -50,6 +50,54 @@ fn new_expiry_offset_date(expiry: &Expiry) -> OffsetDateTime {
         Expiry::OnSessionEnd => {
             now.saturating_add(DEFAULT_DURATION) // TODO: The default should probably be configurable.
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NewSession {
+    session_id: OnceCell<Id>,
+    record: OnceCell<Record>,
+    store: Arc<dyn NewSessionStore>,
+    expiry: Arc<parking_lot::Mutex<Expiry>>,
+}
+
+impl NewSession {
+    pub fn new(session_store: &Arc<impl NewSessionStore>, expiry: Expiry) -> Self {
+        Self {
+            session_id: OnceCell::new(),
+            record: OnceCell::new(),
+            store: session_store.clone(),
+            expiry: Arc::new(parking_lot::Mutex::new(expiry)),
+        }
+    }
+
+    pub async fn get_session_id(&self) -> Result<&Id> {
+        Ok(self
+            .session_id
+            .get_or_try_init(|| async {
+                let possible_id = Id::default();
+                self.store.create(&possible_id).await?;
+                Ok::<Id, Error>(possible_id)
+            })
+            .await?)
+    }
+
+    pub async fn get_record(&self) -> Result<&Record> {
+        Ok(self
+            .record
+            .get_or_try_init(|| async {
+                let session_id = self.get_session_id().await?;
+                let record = self.store.load(&session_id).await?.ok_or_else(|| {
+                    session_store::Error::Backend("Record doesn't already exist.".to_string())
+                })?;
+                Ok::<Record, Error>(record)
+            })
+            .await?)
+    }
+
+    pub fn get_cookie_expire_time(&self) -> OffsetDateTime {
+        let e = self.expiry.lock();
+        new_expiry_offset_date(&e)
     }
 }
 
@@ -996,6 +1044,45 @@ mod tests {
             let expire_date = new_expiry_offset_date(&Expiry::OnInactivity(inacivity_duration));
             assert_eq!(expected_offset, expire_date);
         }
+    }
+
+    mod new_session {
+        use super::*;
+        use session_store::MockNewSessionStore;
+
+        #[tokio::test]
+        async fn create_new_session_does_not_hit_store() {
+            let mut mock_session_store = MockNewSessionStore::new();
+            mock_session_store.expect_create().never();
+            mock_session_store.expect_save().never();
+            mock_session_store.expect_load().never();
+            mock_session_store.expect_delete().never();
+            let wrapped_ss = mock_session_store.into();
+            NewSession::new(&wrapped_ss, Expiry::OnSessionEnd);
+        }
+
+        #[tokio::test]
+        async fn create_new_session_in_store() {
+            let mut mock_session_store = MockNewSessionStore::new();
+            mock_session_store
+                .expect_create()
+                .times(1)
+                .return_once(move |_| Ok(()));
+            let wrapped_ss = Arc::new(mock_session_store);
+            let session = NewSession::new(&wrapped_ss, Expiry::OnSessionEnd);
+            session.get_session_id().await.expect("Couldn't get id.");
+        }
+
+        #[tokio::test]
+        async fn create_new_session_get_cookie_expire_time() {
+            let mut mock_session_store = MockNewSessionStore::new();
+            let wrapped_ss = Arc::new(mock_session_store);
+            let at_time = time::macros::datetime!(1981-03-19 0:00 +0);
+            let session = NewSession::new(&wrapped_ss, Expiry::AtDateTime(at_time));
+            let expire_time = session.get_cookie_expire_time();
+            assert_eq!(at_time, expire_time)
+        }
+
     }
 
     mod session {

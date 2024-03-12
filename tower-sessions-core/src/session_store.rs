@@ -24,6 +24,22 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub trait NewSessionStore: Debug + Send + Sync + 'static {
+    /// A method for saving a session in a store.
+    async fn create(&self, session_id: &Id) -> Result<()>;
+
+    /// A method for saving a session in a store.
+    async fn save(&self, session_record: &Record) -> Result<()>;
+
+    /// A method for loading a session from a store.
+    async fn load(&self, session_id: &Id) -> Result<Option<Record>>;
+
+    /// A method for deleting a session from a store.
+    async fn delete(&self, session_id: &Id) -> Result<()>;
+}
+
 /// An arbitrary store which houses the session data.
 ///
 /// # Implementing your own store

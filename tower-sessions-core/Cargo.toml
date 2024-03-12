@@ -21,6 +21,7 @@ futures = { version = "0.3.28", default-features = false, features = [
     "async-await",
 ] }
 http = "1.0"
+mockall_double = "0.3.1"
 parking_lot = { version = "0.12.1", features = ["serde"] }
 rand = "0.8.5"
 serde = { version = "1.0.189", features = ["derive", "rc"] }
