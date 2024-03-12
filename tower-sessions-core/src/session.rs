@@ -554,13 +554,16 @@ impl Session {
     /// ```
     pub fn expiry_date(&self) -> OffsetDateTime {
         let expiry = self.expiry.lock();
+        let now = OffsetDateTime::now_utc();
+
+        #[cfg(test)]
+        let now = time::macros::datetime!(1981-03-19 0:00 +0);
+
         match *expiry {
-            Some(Expiry::OnInactivity(duration)) => {
-                OffsetDateTime::now_utc().saturating_add(duration)
-            }
+            Some(Expiry::OnInactivity(duration)) => now.saturating_add(duration),
             Some(Expiry::AtDateTime(datetime)) => datetime,
             Some(Expiry::OnSessionEnd) | None => {
-                OffsetDateTime::now_utc().saturating_add(DEFAULT_DURATION) // TODO: The default should probably be configurable.
+                now.saturating_add(DEFAULT_DURATION) // TODO: The default should probably be configurable.
             }
         }
     }
@@ -953,4 +956,58 @@ pub enum Expiry {
     /// This value may be extended manually with
     /// [`set_expiry`](Session::set_expiry).
     AtDateTime(OffsetDateTime),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod session {
+        use super::*;
+        use crate::session_store::MockSessionStore;
+
+        #[test]
+        fn test_get_expiry_date_no_expiry() {
+            let store = MockSessionStore::new();
+            let session = Session::new(None, Arc::new(store), None);
+            let fake_now = time::macros::datetime!(1981-03-19 0:00 +0);
+            let expected_offset = fake_now.saturating_add(DEFAULT_DURATION);
+            let expire_date = session.expiry_date();
+            assert_eq!(expected_offset, expire_date);
+        }
+
+        #[test]
+        fn test_get_expiry_date_expiry_onsessionend() {
+            let store = MockSessionStore::new();
+            let session = Session::new(None, Arc::new(store), Some(Expiry::OnSessionEnd));
+            let fake_now = time::macros::datetime!(1981-03-19 0:00 +0);
+            let expected_offset = fake_now.saturating_add(DEFAULT_DURATION);
+            let expire_date = session.expiry_date();
+            assert_eq!(expected_offset, expire_date);
+        }
+
+        #[test]
+        fn test_get_expiry_date_expiry_atdatetime() {
+            let store = MockSessionStore::new();
+            let at_time = time::macros::datetime!(1981-03-19 0:00 +0);
+            let session = Session::new(None, Arc::new(store), Some(Expiry::AtDateTime(at_time)));
+            let expire_date = session.expiry_date();
+            assert_eq!(at_time, expire_date);
+        }
+
+        #[test]
+        fn test_get_expiry_date_expiry_oninactivity() {
+            let store = MockSessionStore::new();
+            let fake_now = time::macros::datetime!(1981-03-19 0:00 +0);
+            let inacivity_duration = time::Duration::days(1);
+            let session = Session::new(
+                None,
+                Arc::new(store),
+                Some(Expiry::OnInactivity(inacivity_duration)),
+            );
+            let expected_offset = fake_now.saturating_add(inacivity_duration);
+            let expire_date = session.expiry_date();
+            assert_eq!(expected_offset, expire_date);
+        }
+    }
 }
