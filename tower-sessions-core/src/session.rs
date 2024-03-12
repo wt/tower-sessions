@@ -37,6 +37,22 @@ pub enum Error {
     Store(#[from] session_store::Error),
 }
 
+fn new_expiry_offset_date(expiry: &Expiry) -> OffsetDateTime {
+    #[allow(unused)]
+    let now = OffsetDateTime::now_utc();
+
+    #[cfg(test)]
+    let now = time::macros::datetime!(1981-03-19 0:00 +0);
+
+    match *expiry {
+        Expiry::OnInactivity(duration) => now.saturating_add(duration),
+        Expiry::AtDateTime(datetime) => datetime,
+        Expiry::OnSessionEnd => {
+            now.saturating_add(DEFAULT_DURATION) // TODO: The default should probably be configurable.
+        }
+    }
+}
+
 /// A session which allows HTTP applications to associate key-value pairs with
 /// visitors.
 #[derive(Debug, Clone)]
@@ -554,17 +570,9 @@ impl Session {
     /// ```
     pub fn expiry_date(&self) -> OffsetDateTime {
         let expiry = self.expiry.lock();
-        let now = OffsetDateTime::now_utc();
-
-        #[cfg(test)]
-        let now = time::macros::datetime!(1981-03-19 0:00 +0);
-
         match *expiry {
-            Some(Expiry::OnInactivity(duration)) => now.saturating_add(duration),
-            Some(Expiry::AtDateTime(datetime)) => datetime,
-            Some(Expiry::OnSessionEnd) | None => {
-                now.saturating_add(DEFAULT_DURATION) // TODO: The default should probably be configurable.
-            }
+            None => new_expiry_offset_date(&Expiry::OnSessionEnd),
+            Some(e) => new_expiry_offset_date(&e),
         }
     }
 
@@ -962,6 +970,34 @@ pub enum Expiry {
 mod tests {
     use super::*;
 
+    mod cookie_expiry_generation {
+        use super::*;
+
+        #[test]
+        fn test_new_expiry_offset_date_expiry_onsessionend() {
+            let fake_now = time::macros::datetime!(1981-03-19 0:00 +0);
+            let expected_offset = fake_now.saturating_add(DEFAULT_DURATION);
+            let expire_date = new_expiry_offset_date(&Expiry::OnSessionEnd);
+            assert_eq!(expected_offset, expire_date);
+        }
+
+        #[test]
+        fn test_new_expiry_offset_date_expiry_atdatetime() {
+            let at_time = time::macros::datetime!(1981-03-19 0:00 +0);
+            let expire_date = new_expiry_offset_date(&Expiry::AtDateTime(at_time));
+            assert_eq!(at_time, expire_date);
+        }
+
+        #[test]
+        fn test_new_expiry_offset_date_expiry_oninactivity() {
+            let fake_now = time::macros::datetime!(1981-03-19 0:00 +0);
+            let inacivity_duration = time::Duration::days(1);
+            let expected_offset = fake_now.saturating_add(inacivity_duration);
+            let expire_date = new_expiry_offset_date(&Expiry::OnInactivity(inacivity_duration));
+            assert_eq!(expected_offset, expire_date);
+        }
+    }
+
     mod session {
         use super::*;
         use crate::session_store::MockSessionStore;
@@ -977,37 +1013,12 @@ mod tests {
         }
 
         #[test]
-        fn test_get_expiry_date_expiry_onsessionend() {
-            let store = MockSessionStore::new();
-            let session = Session::new(None, Arc::new(store), Some(Expiry::OnSessionEnd));
-            let fake_now = time::macros::datetime!(1981-03-19 0:00 +0);
-            let expected_offset = fake_now.saturating_add(DEFAULT_DURATION);
-            let expire_date = session.expiry_date();
-            assert_eq!(expected_offset, expire_date);
-        }
-
-        #[test]
-        fn test_get_expiry_date_expiry_atdatetime() {
+        fn test_get_expiry_date_expiry_some_expiry() {
             let store = MockSessionStore::new();
             let at_time = time::macros::datetime!(1981-03-19 0:00 +0);
             let session = Session::new(None, Arc::new(store), Some(Expiry::AtDateTime(at_time)));
             let expire_date = session.expiry_date();
             assert_eq!(at_time, expire_date);
-        }
-
-        #[test]
-        fn test_get_expiry_date_expiry_oninactivity() {
-            let store = MockSessionStore::new();
-            let fake_now = time::macros::datetime!(1981-03-19 0:00 +0);
-            let inacivity_duration = time::Duration::days(1);
-            let session = Session::new(
-                None,
-                Arc::new(store),
-                Some(Expiry::OnInactivity(inacivity_duration)),
-            );
-            let expected_offset = fake_now.saturating_add(inacivity_duration);
-            let expire_date = session.expiry_date();
-            assert_eq!(expected_offset, expire_date);
         }
     }
 }
